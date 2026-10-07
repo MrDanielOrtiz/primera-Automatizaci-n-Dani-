@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
   schedule:
-    - cron: "*/30 13-23 * * 5"
+    # GitHub Actions cron usa UTC. Mexico City en octubre = UTC-6.\n    - cron: "*/30 19-23 * * 5"\n    - cron: "*/30 0-5 * * 6"
 
 permissions:
   contents: write
@@ -50,6 +50,6 @@ jobs:
         run: |
           git config user.name "radar-jurisprudencial-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data reports seen.json
+          git add data reports seen.json ius_checkpoint.json
           git diff --cached --quiet || git commit -m "chore: radar jurisprudencial semanal"
           git push
