@@ -124,19 +124,30 @@ def click_week(page, target: date) -> bool:
     return False
 
 def _fetch_ius(ius: int):
-    """Fetch one official SJF weekly detail page with a short hard timeout."""
-    url = f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}"
-    try:
-        rr = requests.get(
-            url,
-            headers={"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"},
-            timeout=(2.5, 5),
-        )
-        if rr.status_code != 200 or "Registro digital:" not in rr.text:
-            return ius, None
-        return ius, rr.text
-    except requests.RequestException:
-        return ius, None
+    """Fetch one official SJF thesis detail page with a short hard timeout.
+    The legacy weekly host is the canonical detail source; the SJF2 host is
+    attempted as a fallback because the public site has been migrated.
+    """
+    urls = [
+        f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}",
+        f"https://sjf2.scjn.gob.mx/detalle/tesis/{ius}",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; RadarJurisprudencial/1.0; +https://github.com/MrDanielOrtiz/primera-Automatizaci-n-Dani-)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    for url in urls:
+        try:
+            rr = requests.get(url, headers=headers, timeout=(3, 6), allow_redirects=True)
+            if rr.status_code != 200:
+                continue
+            html = rr.text
+            signature = re.search(r"Registro\s+digital\s*[:#]?", html, re.I)
+            if signature:
+                return ius, html
+        except requests.RequestException:
+            continue
+    return ius, None
 
 def _parse_publication(html: str):
     soup = BeautifulSoup(html, "lxml")
@@ -207,8 +218,13 @@ def discover_weekly_issues(target: date):
             if done_count % 10 == 0 or done_count == (end_ius - start_ius + 1):
                 print(f"[SJF] sondeados {done_count}/{end_ius-start_ius+1}", flush=True)
 
+    valid_pages = 0
+    publication_samples = []
     for ius in sorted(results):
+        valid_pages += 1
         published, soup = _parse_publication(results[ius])
+        if len(publication_samples) < 5 and published:
+            publication_samples.append(f"{ius}:{published.isoformat()}")
         if published == target:
             title_node = soup.find("h1")
             title = clean(title_node.get_text(" ", strip=True)) if title_node else ""
@@ -216,6 +232,10 @@ def discover_weekly_issues(target: date):
             found.append({"url": url, "title": title, "source_page": url, "html": results[ius]})
             max_target_ius = max(max_target_ius, ius)
             print(f"[SJF] encontrado IUS {ius} ({len(found)})", flush=True)
+
+    print(f"[SJF] páginas oficiales válidas: {valid_pages}/{len(results)}", flush=True)
+    if publication_samples:
+        print("[SJF] muestra de fechas publicadas: " + ", ".join(publication_samples), flush=True)
 
     if found:
         checkpoint_path.write_text(
@@ -227,6 +247,11 @@ def discover_weekly_issues(target: date):
         )
         print(
             f"[SJF] Edición {target.isoformat()} verificada: {len(found)} tesis oficiales.",
+            flush=True,
+        )
+    else:
+        print(
+            f"[SJF] No hubo coincidencias exactas para {target.isoformat()} dentro del rango IUS.",
             flush=True,
         )
     return found
