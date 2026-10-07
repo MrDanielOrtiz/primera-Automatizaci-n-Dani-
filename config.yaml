@@ -1,0 +1,28 @@
+official_base: "https://sjfsemanal.scjn.gob.mx"
+official_sjf2: "https://sjf2.scjn.gob.mx"
+official_scjn: "https://www.scjn.gob.mx"
+weekly_page: "https://sjfsemanal.scjn.gob.mx/listado-resultado-tesis"
+agreements_page: "https://sjfsemanal.scjn.gob.mx/busqueda-principal-acuerdos"
+gaceta_page: "https://www.scjn.gob.mx/coordinacion/gaceta"
+timezone: "America/Mexico_City"
+lookback_fridays: 8
+max_detail_pages: 5000
+request_timeout_seconds: 45
+score:
+  urgent: 85
+  high: 65
+  medium: 40
+  p1: 30
+  p2: 22
+  p3: 16
+  p4: 12
+  p5: 10
+  plenary: 12
+  line_change: 18
+  transversal: 8
+email:
+  host: "smtp.gmail.com"
+  port: 587
+  from_env: "RADAR_EMAIL_FROM"
+  password_env: "RADAR_EMAIL_PASSWORD"
+  to: "d.ortizd14@gmail.com"
