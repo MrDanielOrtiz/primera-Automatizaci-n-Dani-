@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv, json, os, re, smtplib, sys, zipfile
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -52,9 +52,43 @@ def clean(s):
     return re.sub(r"\s+", " ", s or "").strip()
 
 def latest_fridays(n):
-    d = date.today()
-    d -= timedelta(days=(d.weekday() - 4) % 7)
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo(CFG["timezone"])).date()
+    except Exception:
+        today = date.today()
+    d = today - timedelta(days=(today.weekday() - 4) % 7)
     return [d - timedelta(days=7*i) for i in range(n)]
+
+def requested_edition():
+    value = os.getenv("TARGET_EDITION_DATE", "").strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        die("TARGET_EDITION_DATE inválida: " + value + ". Use YYYY-MM-DD.")
+
+def is_scheduled_poll():
+    return os.getenv("RADAR_MODE", "manual").lower() == "scheduled"
+
+def seen_path():
+    return ROOT / "seen.json"
+
+def load_seen():
+    p = seen_path()
+    if not p.exists():
+        return set()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return set(data if isinstance(data, list) else data.get("processed_editions", []))
+    except Exception:
+        return set()
+
+def mark_seen(target):
+    seen = load_seen()
+    seen.add(target.isoformat())
+    seen_path().write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=2), encoding="utf-8")
 
 def same_host(url, allowed):
     return urlparse(url).netloc in {urlparse(x).netloc for x in allowed}
@@ -89,7 +123,7 @@ def click_week(page, target: date) -> bool:
             pass
     return False
 
-def collect_week(page, target: date):
+def collect_week(page, target: date, strict=True):
     urls = [CFG["weekly_page"], CFG["agreements_page"]]
     records = []
     visited = set()
@@ -106,7 +140,9 @@ def collect_week(page, target: date):
             except Exception:
                 pass
             if not click_week(page, target):
-                continue
+                if strict:
+                    raise RuntimeError("La edición " + target.isoformat() + " no está disponible en la interfaz oficial.")
+                return []
         for selector in ["input[type=checkbox]", "input[type=radio]"]:
             try:
                 for i in range(page.locator(selector).count()):
@@ -153,7 +189,9 @@ def collect_week(page, target: date):
             except Exception:
                 break
     if not records:
-        die(f"No fue posible recuperar resultados oficiales para la semana {target.isoformat()}.")
+        if strict:
+            die("No fue posible recuperar resultados oficiales para la semana " + target.isoformat() + ".")
+        return []
     return records
 
 def parse_detail(page, item, target):
@@ -286,19 +324,34 @@ def send_email(target, pdf, source_zip, records):
 
 def main():
     target=None; raw_items=None
+    explicit_target = requested_edition()
+    scheduled = is_scheduled_poll()
+    if explicit_target:
+        candidates = [explicit_target]
+    elif scheduled:
+        candidates = latest_fridays(1)
+    else:
+        candidates = latest_fridays(CFG["lookback_fridays"])
+
+    if scheduled and candidates and candidates[0].isoformat() in load_seen():
+        print("OK: la edición " + candidates[0].isoformat() + " ya fue procesada; no se vuelve a enviar.")
+        return
     with sync_playwright() as p:
         browser=p.chromium.launch(headless=True)
         page=browser.new_page(locale="es-MX")
-        for friday in latest_fridays(CFG["lookback_fridays"]):
+        for friday in candidates:
             try:
-                raw_items=collect_week(page, friday)
+                raw_items=collect_week(page, friday, strict=not scheduled)
                 if raw_items:
                     target=friday; break
             except Exception as e:
-                print(f"No disponible {friday}: {e}")
+                print("No disponible " + str(friday) + ": " + str(e))
+        if scheduled and not target:
+            print("Aún no aparece la edición semanal oficial; el siguiente disparo programado volverá a comprobarla.")
+            return
         if not target or not raw_items: die("No se pudo verificar una edición semanal oficial.")
         records=[]
-        for item in raw_items[:CFG["max_detail_pages"]]:
+        for item in raw_items:
             try: records.append(parse_detail(page,item,target))
             except Exception as e: print("Detalle omitido con error verificable:",item["url"],e)
         browser.close()
@@ -308,6 +361,7 @@ def main():
     save_inventory(target, records)
     pdf=make_pdf(target, records)
     send_email(target,pdf,source_zip,records)
+    mark_seen(target)
     print(f"OK {target.isoformat()} registros={len(records)} pdf={pdf} source={source_zip}")
 
 if __name__=="__main__":
