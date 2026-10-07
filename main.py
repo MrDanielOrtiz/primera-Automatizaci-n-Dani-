@@ -123,75 +123,70 @@ def click_week(page, target: date) -> bool:
             pass
     return False
 
-def collect_week(page, target: date, strict=True):
-    urls = [CFG["weekly_page"], CFG["agreements_page"]]
-    records = []
-    visited = set()
-    for start_url in urls:
-        page.goto(start_url, wait_until="domcontentloaded", timeout=CFG["request_timeout_seconds"]*1000)
-        page.wait_for_timeout(1200)
-        if not click_week(page, target):
-            # Try year/month controls and inspect all visible links as a last documented-UI route.
-            try:
-                page.get_by_text(str(target.year), exact=True).last.click()
-                page.wait_for_timeout(400)
-                page.get_by_text(target.strftime("%B").capitalize(), exact=True).last.click()
-                page.wait_for_timeout(400)
-            except Exception:
-                pass
-            if not click_week(page, target):
-                if strict:
-                    raise RuntimeError("La edición " + target.isoformat() + " no está disponible en la interfaz oficial.")
-                return []
-        for selector in ["input[type=checkbox]", "input[type=radio]"]:
-            try:
-                for i in range(page.locator(selector).count()):
-                    el = page.locator(selector).nth(i)
-                    if el.is_visible() and not el.is_checked():
-                        el.check()
-            except Exception:
-                pass
-        for label in ["Buscar", "Consultar"]:
-            try:
-                page.get_by_role("button", name=re.compile(label, re.I)).click()
-                page.wait_for_timeout(1500)
-                break
-            except Exception:
-                pass
-        # Paginate through result pages using visible pagination controls.
-        for _ in range(100):
-            html = page.content()
-            soup = BeautifulSoup(html, "lxml")
-            for a in soup.find_all("a", href=True):
-                href = urljoin(page.url, a["href"])
-                txt = clean(a.get_text(" ", strip=True))
-                if not same_host(href, urls):
-                    continue
-                if re.search(r"/detalle/|/tesis/|/ejecutoria/|/voto/|/acuerdo/", href, re.I):
-                    key = (href, txt)
-                    if key in visited: continue
-                    visited.add(key)
-                    records.append({"url": href, "title": txt, "source_page": page.url})
-            nxt = None
-            for role in ["Siguiente", "Siguiente página", "Next"]:
-                try:
-                    x = page.get_by_role("link", name=re.compile(role, re.I)).last
-                    if x.count() and x.is_visible() and x.get_attribute("aria-disabled") != "true":
-                        nxt = x; break
-                except Exception: pass
-            if not nxt:
-                break
-            try:
-                before = page.url
-                nxt.click(); page.wait_for_timeout(1000)
-                if page.url == before and "disabled" in (nxt.get_attribute("class") or "").lower():
+def discover_weekly_issues(target: date):
+    """Discover the weekly thesis universe through official SJF detail pages."""
+    checkpoint_path = ROOT / "ius_checkpoint.json"
+    seed = int(os.getenv("SJF_IUS_SEED", str(CFG.get("ius_seed", 2032726))))
+    checkpoint = seed
+    if checkpoint_path.exists():
+        try:
+            checkpoint = max(checkpoint, int(json.loads(checkpoint_path.read_text(encoding="utf-8")).get("max_ius", seed)))
+        except Exception:
+            pass
+
+    # The current public SJF UI is JavaScript-driven and its week selector is not
+    # reliably exposed to automation. Official detail URLs remain publicly reachable
+    # and expose the publication date, so we discover the week's IUS range directly.
+    start_ius = max(1, checkpoint - 150) if target <= date(2026, 10, 2) else checkpoint + 1
+    max_scan = int(CFG.get("ius_scan_window", 250))
+    end_ius = start_ius + max_scan
+    print(f"[SJF] Descubriendo IUS {start_ius}-{end_ius} para {target.isoformat()}...", flush=True)
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"})
+    found = []
+    max_valid = checkpoint
+    consecutive_missing = 0
+    months = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+              "julio":7,"agosto":8,"septiembre":9,"setiembre":9,"octubre":10,
+              "noviembre":11,"diciembre":12}
+
+    for ius in range(start_ius, end_ius + 1):
+        url = f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}"
+        try:
+            rr = session.get(url, timeout=CFG["request_timeout_seconds"])
+            if rr.status_code != 200 or "Registro digital:" not in rr.text:
+                consecutive_missing += 1
+                if ius > checkpoint and consecutive_missing >= 40 and found:
                     break
-            except Exception:
-                break
-    if not records:
-        if strict:
-            die("No fue posible recuperar resultados oficiales para la semana " + target.isoformat() + ".")
-        return []
+                continue
+            consecutive_missing = 0
+            soup = BeautifulSoup(rr.text, "lxml")
+            text = clean(soup.get_text(" ", strip=True))
+            pub = re.search(r"Publicación:s*(?:[A-Za-zÁÉÍÓÚáéíóú]+s+)?(d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (d{4})", text, re.I)
+            if not pub:
+                pub = re.search(r"(?:publicó|publicada|publicado)s+(?:els+)?(?:vierness+)?(d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (d{4})", text, re.I)
+            if not pub:
+                continue
+            published = date(int(pub.group(3)), months[pub.group(2).lower()], int(pub.group(1)))
+            max_valid = max(max_valid, ius)
+            if published == target:
+                title_node = soup.find("h1")
+                title = clean(title_node.get_text(" ", strip=True)) if title_node else ""
+                found.append({"url": url, "title": title, "source_page": url})
+                print(f"[SJF] encontrado IUS {ius} ({len(found)})", flush=True)
+        except Exception as exc:
+            print(f"[SJF] aviso IUS {ius}: {exc}", flush=True)
+
+    if found:
+        checkpoint_path.write_text(json.dumps({"max_ius": max_valid, "updated": datetime.now(timezone.utc).isoformat()}, indent=2), encoding="utf-8")
+        print(f"[SJF] Edición {target.isoformat()} verificada: {len(found)} tesis oficiales.", flush=True)
+    return found
+
+def collect_week(page, target: date, strict=True):
+    records = discover_weekly_issues(target)
+    if not records and strict:
+        raise RuntimeError("La edición " + target.isoformat() + " no está disponible en la fuente oficial.")
     return records
 
 def parse_detail(page, item, target):
