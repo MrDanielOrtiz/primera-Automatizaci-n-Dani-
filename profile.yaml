@@ -1,0 +1,60 @@
+name: "Daniel Ortiz"
+organization: "Aguirre y Asociados"
+email: "d.ortizd14@gmail.com"
+priority:
+  P1: "Comercio exterior / aduanero"
+  P2: "Fiscal"
+  P3: "Administrativo"
+  P4: "Amparo"
+  P5: "Constitucional / Derechos Humanos"
+topics:
+  - PAMA
+  - embargo precautorio
+  - IMMEX
+  - certificación IVA/IEPS
+  - Anexo 24
+  - sistema de control de inventarios
+  - cuotas compensatorias
+  - clasificación arancelaria
+  - responsabilidad del agente aduanal
+  - devoluciones de IVA
+  - compensaciones
+  - facilidades administrativas
+authorities:
+  - ANAM
+  - SAT
+  - Secretaría de Economía
+  - Secretaría de Energía
+  - TFJA
+frameworks:
+  - RGCE
+  - Ley Aduanera
+  - CFF
+  - Ley del IVA
+  - Ley del IEPS
+  - TIGIE
+  - LIGIE
+  - T-MEC
+  - reglas de origen
+transversal:
+  - comercio exterior
+  - pago de IVA en importaciones
+  - exportaciones
+  - certificación IVA/IEPS
+  - IMMEX
+  - control de inventarios
+  - reformas procesales
+  - amparo
+  - derechos humanos
+  - Pleno
+  - tecnología
+  - inteligencia artificial
+  - evidencia digital
+  - cambio de línea jurisprudencial
+  - contradicción de criterios
+  - laboral relacionado con comercio exterior
+exclude_from_executive:
+  - penal
+  - familiar
+  - agrario
+depth: "A"
