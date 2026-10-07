@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 import yaml
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
@@ -123,71 +123,168 @@ def click_week(page, target: date) -> bool:
             pass
     return False
 
+def _fetch_ius(ius: int):
+    """Fetch one official SJF weekly detail page with a short hard timeout."""
+    url = f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}"
+    try:
+        rr = requests.get(
+            url,
+            headers={"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"},
+            timeout=(4, 8),
+        )
+        if rr.status_code != 200 or "Registro digital:" not in rr.text:
+            return ius, None
+        return ius, rr.text
+    except requests.RequestException:
+        return ius, None
+
+def _parse_publication(html: str):
+    soup = BeautifulSoup(html, "lxml")
+    text = clean(soup.get_text(" ", strip=True))
+    months = {
+        "enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+        "julio":7,"agosto":8,"septiembre":9,"setiembre":9,"octubre":10,
+        "noviembre":11,"diciembre":12
+    }
+    patterns = [
+        r"Publicación:\s*(?:[A-Za-zÁÉÍÓÚáéíóú]+\s+)?(\d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (\d{4})",
+        r"(?:publicó|publicada|publicado)\s+(?:el\s+)?(?:viernes\s+)?(\d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (\d{4})",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            try:
+                return date(int(m.group(3)), months[m.group(2).lower()], int(m.group(1))), soup
+            except (KeyError, ValueError):
+                return None, soup
+    return None, soup
+
 def discover_weekly_issues(target: date):
-    """Discover the weekly thesis universe through official SJF detail pages."""
+    """Discover the exact weekly thesis universe without browser automation.
+
+    The public detail pages are independent official documents. We probe a bounded
+    IUS window concurrently, parse the official publication date, and keep only
+    records whose publication date equals the requested Friday.
+    """
     checkpoint_path = ROOT / "ius_checkpoint.json"
     seed = int(os.getenv("SJF_IUS_SEED", str(CFG.get("ius_seed", 2032726))))
     checkpoint = seed
     if checkpoint_path.exists():
         try:
-            checkpoint = max(checkpoint, int(json.loads(checkpoint_path.read_text(encoding="utf-8")).get("max_ius", seed)))
+            checkpoint = max(
+                checkpoint,
+                int(json.loads(checkpoint_path.read_text(encoding="utf-8")).get("max_ius", seed)),
+            )
         except Exception:
             pass
 
-    # The current public SJF UI is JavaScript-driven and its week selector is not
-    # reliably exposed to automation. Official detail URLs remain publicly reachable
-    # and expose the publication date, so we discover the week's IUS range directly.
-    start_ius = max(1, checkpoint - 60) if target <= date(2026, 10, 2) else checkpoint + 1
+    # Bootstrap the known 2026-10-02 edition from the nearby IUS range.
+    if target <= date(2026, 10, 2):
+        start_ius = max(1, checkpoint - 60)
+    else:
+        start_ius = checkpoint + 1
+
     max_scan = int(CFG.get("ius_scan_window", 120))
     end_ius = start_ius + max_scan
-    print(f"[SJF] Descubriendo IUS {start_ius}-{end_ius} para {target.isoformat()}...", flush=True)
+    workers = int(CFG.get("ius_workers", 12))
+    print(
+        f"[SJF] Descubriendo IUS {start_ius}-{end_ius} para {target.isoformat()} "
+        f"({workers} conexiones concurrentes)...",
+        flush=True,
+    )
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"})
     found = []
-    max_valid = checkpoint
-    consecutive_missing = 0
-    months = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
-              "julio":7,"agosto":8,"septiembre":9,"setiembre":9,"octubre":10,
-              "noviembre":11,"diciembre":12}
+    max_target_ius = checkpoint
+    results = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_ius, ius): ius for ius in range(start_ius, end_ius + 1)}
+        done_count = 0
+        for future in as_completed(futures):
+            ius, html = future.result()
+            done_count += 1
+            if html:
+                results[ius] = html
+            if done_count % 20 == 0 or done_count == (end_ius - start_ius + 1):
+                print(f"[SJF] sondeados {done_count}/{end_ius-start_ius+1}", flush=True)
 
-    for ius in range(start_ius, end_ius + 1):
-        url = f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}"
-        try:
-            rr = session.get(url, timeout=CFG["request_timeout_seconds"])
-            if rr.status_code != 200 or "Registro digital:" not in rr.text:
-                consecutive_missing += 1
-                if ius > checkpoint and consecutive_missing >= 40 and found:
-                    break
-                continue
-            consecutive_missing = 0
-            soup = BeautifulSoup(rr.text, "lxml")
-            text = clean(soup.get_text(" ", strip=True))
-            pub = re.search(r"Publicación:s*(?:[A-Za-zÁÉÍÓÚáéíóú]+s+)?(d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (d{4})", text, re.I)
-            if not pub:
-                pub = re.search(r"(?:publicó|publicada|publicado)s+(?:els+)?(?:vierness+)?(d{1,2}) de ([A-Za-zÁÉÍÓÚáéíóú]+) de (d{4})", text, re.I)
-            if not pub:
-                continue
-            published = date(int(pub.group(3)), months[pub.group(2).lower()], int(pub.group(1)))
-            max_valid = max(max_valid, ius)
-            if published == target:
-                title_node = soup.find("h1")
-                title = clean(title_node.get_text(" ", strip=True)) if title_node else ""
-                found.append({"url": url, "title": title, "source_page": url})
-                print(f"[SJF] encontrado IUS {ius} ({len(found)})", flush=True)
-        except Exception as exc:
-            print(f"[SJF] aviso IUS {ius}: {exc}", flush=True)
+    for ius in sorted(results):
+        published, soup = _parse_publication(results[ius])
+        if published == target:
+            title_node = soup.find("h1")
+            title = clean(title_node.get_text(" ", strip=True)) if title_node else ""
+            url = f"https://sjfsemanal.scjn.gob.mx/detalle/tesis/{ius}"
+            found.append({"url": url, "title": title, "source_page": url, "html": results[ius]})
+            max_target_ius = max(max_target_ius, ius)
+            print(f"[SJF] encontrado IUS {ius} ({len(found)})", flush=True)
 
     if found:
-        checkpoint_path.write_text(json.dumps({"max_ius": max_valid, "updated": datetime.now(timezone.utc).isoformat()}, indent=2), encoding="utf-8")
-        print(f"[SJF] Edición {target.isoformat()} verificada: {len(found)} tesis oficiales.", flush=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {"max_ius": max_target_ius, "updated": datetime.now(timezone.utc).isoformat()},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(
+            f"[SJF] Edición {target.isoformat()} verificada: {len(found)} tesis oficiales.",
+            flush=True,
+        )
     return found
 
 def collect_week(page, target: date, strict=True):
     records = discover_weekly_issues(target)
     if not records and strict:
-        raise RuntimeError("La edición " + target.isoformat() + " no está disponible en la fuente oficial.")
+        raise RuntimeError(
+            "La edición " + target.isoformat() + " no está disponible en la fuente oficial."
+        )
     return records
+
+def parse_detail(page, item, target):
+    # Reuse the exact HTML already fetched during discovery. This removes a second
+    # network request per criterion and eliminates Playwright/browser hangs.
+    html = item.get("html", "")
+    if not html:
+        rr = requests.get(
+            item["url"],
+            headers={"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"},
+            timeout=(4, 10),
+        )
+        rr.raise_for_status()
+        html = rr.text
+
+    soup = BeautifulSoup(html, "lxml")
+    text = clean(soup.get_text(" ", strip=True))
+    title = clean(soup.find("h1").get_text(" ", strip=True)) if soup.find("h1") else item["title"]
+    body = {}
+    labels = ["Registro digital", "Órgano", "Materia", "Época", "Fecha", "Tipo de criterio"]
+    for label in labels:
+        node = soup.find(string=re.compile(re.escape(label), re.I))
+        if node:
+            parent = node.parent
+            body[label] = clean(parent.parent.get_text(" ", strip=True) if parent and parent.parent else str(node))
+
+    register = ""
+    m = re.search(r"Registro digital\s*[:#]?\s*(\d{5,})", text, re.I)
+    if m:
+        register = m.group(1)
+
+    kind = "Precedente" if "ejecutoria" in item["url"] or "precedente" in title.lower() else (
+        "Acuerdo" if "acuerdo" in item["url"] else "Tesis"
+    )
+    return Record(
+        record_id=register or item["url"],
+        kind=kind,
+        title=title,
+        url=item["url"],
+        official_source=item["url"],
+        publication_date=target.isoformat(),
+        register=register,
+        court=body.get("Órgano", ""),
+        matter=body.get("Materia", ""),
+        epoch=body.get("Época", ""),
+        text=text[:30000],
+        source_page=item["source_page"],
+    )
 
 def parse_detail(page, item, target):
     page.goto(item["url"], wait_until="domcontentloaded", timeout=CFG["request_timeout_seconds"]*1000)
@@ -248,7 +345,7 @@ def archive_source(target, pages, records):
     for i, rec in enumerate(records, 1):
         p = folder / f"{i:05d}.html"
         try:
-            rr = session.get(rec.url, timeout=CFG["request_timeout_seconds"])
+            rr = session.get(rec.url, timeout=(4, 10))
             rr.raise_for_status()
             p.write_bytes(rr.content)
         except Exception:
@@ -331,25 +428,23 @@ def main():
     if scheduled and candidates and candidates[0].isoformat() in load_seen():
         print("OK: la edición " + candidates[0].isoformat() + " ya fue procesada; no se vuelve a enviar.")
         return
-    with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True)
-        page=browser.new_page(locale="es-MX")
-        for friday in candidates:
-            try:
-                raw_items=collect_week(page, friday, strict=not scheduled)
-                if raw_items:
-                    target=friday; break
-            except Exception as e:
-                print("No disponible " + str(friday) + ": " + str(e))
-        if scheduled and not target:
-            print("Aún no aparece la edición semanal oficial; el siguiente disparo programado volverá a comprobarla.")
-            return
-        if not target or not raw_items: die("No se pudo verificar una edición semanal oficial.")
-        records=[]
-        for item in raw_items:
-            try: records.append(parse_detail(page,item,target))
-            except Exception as e: print("Detalle omitido con error verificable:",item["url"],e)
-        browser.close()
+    for friday in candidates:
+        try:
+            raw_items=collect_week(None, friday, strict=not scheduled)
+            if raw_items:
+                target=friday; break
+        except Exception as e:
+            print("No disponible " + str(friday) + ": " + str(e), flush=True)
+    if scheduled and not target:
+        print("Aún no aparece la edición semanal oficial; el siguiente disparo programado volverá a comprobarla.")
+        return
+    if not target or not raw_items: die("No se pudo verificar una edición semanal oficial.")
+    records=[]
+    for item in raw_items:
+        try:
+            records.append(parse_detail(None,item,target))
+        except Exception as e:
+            print("Detalle omitido con error verificable:",item["url"],e, flush=True)
     if not records: die("La edición oficial no produjo registros procesables; se detiene para evitar huecos silenciosos.")
     records=[score_record(r) for r in records]
     source_zip=archive_source(target, [CFG["weekly_page"],CFG["agreements_page"]], records)
