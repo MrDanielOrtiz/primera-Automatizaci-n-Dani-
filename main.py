@@ -137,8 +137,8 @@ def discover_weekly_issues(target: date):
     # The current public SJF UI is JavaScript-driven and its week selector is not
     # reliably exposed to automation. Official detail URLs remain publicly reachable
     # and expose the publication date, so we discover the week's IUS range directly.
-    start_ius = max(1, checkpoint - 150) if target <= date(2026, 10, 2) else checkpoint + 1
-    max_scan = int(CFG.get("ius_scan_window", 250))
+    start_ius = max(1, checkpoint - 60) if target <= date(2026, 10, 2) else checkpoint + 1
+    max_scan = int(CFG.get("ius_scan_window", 120))
     end_ius = start_ius + max_scan
     print(f"[SJF] Descubriendo IUS {start_ius}-{end_ius} para {target.isoformat()}...", flush=True)
 
