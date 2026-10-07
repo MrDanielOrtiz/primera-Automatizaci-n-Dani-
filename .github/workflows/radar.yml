@@ -2,9 +2,13 @@ name: Radar Jurisprudencial
 
 on:
   workflow_dispatch:
+    inputs:
+      target_edition_date:
+        description: "Fecha del Semanario a procesar (YYYY-MM-DD). Vacío = último publicado."
+        required: false
+        default: ""
   schedule:
-    - cron: "0 8 * * 1"
-      timezone: "America/Mexico_City"
+    - cron: "*/30 13-23 * * 5"
 
 permissions:
   contents: write
@@ -27,22 +31,25 @@ jobs:
         env:
           RADAR_EMAIL_FROM: ${{ secrets.RADAR_EMAIL_FROM }}
           RADAR_EMAIL_PASSWORD: ${{ secrets.RADAR_EMAIL_PASSWORD }}
+          RADAR_MODE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+          TARGET_EDITION_DATE: ${{ inputs.target_edition_date }}
         run: python main.py
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radar-jurisprudencial
+          name: radar-jurisprudencial-${{ github.run_id }}
           path: |
             reports/*
             data/processed/*
             data/raw/*.zip
+            seen.json
           if-no-files-found: warn
       - name: Commit history
         if: success()
         run: |
           git config user.name "radar-jurisprudencial-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data reports
+          git add data reports seen.json
           git diff --cached --quiet || git commit -m "chore: radar jurisprudencial semanal"
           git push
