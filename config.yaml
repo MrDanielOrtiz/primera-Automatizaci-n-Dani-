@@ -7,7 +7,10 @@ gaceta_page: "https://www.scjn.gob.mx/coordinacion/gaceta"
 timezone: "America/Mexico_City"
 lookback_fridays: 8
 max_detail_pages: 5000
-request_timeout_seconds: 45
+ius_seed: 2032726
+ius_scan_window: 120
+ius_workers: 12
+request_timeout_seconds: 10
 score:
   urgent: 85
   high: 65
