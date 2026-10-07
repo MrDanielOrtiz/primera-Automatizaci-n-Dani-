@@ -9,7 +9,8 @@ on:
         default: ""
   schedule:
     # GitHub Actions cron usa UTC. Mexico City en octubre = UTC-6.
-    - cron: "*/30 19-23 * * 5"\n    - cron: "*/30 0-5 * * 6"
+    - cron: "*/30 19-23 * * 5"
+    - cron: "*/30 0-5 * * 6"
 
 permissions:
   contents: write
