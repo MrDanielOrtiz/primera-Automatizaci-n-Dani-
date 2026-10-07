@@ -130,7 +130,7 @@ def _fetch_ius(ius: int):
         rr = requests.get(
             url,
             headers={"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"},
-            timeout=(4, 8),
+            timeout=(2.5, 5),
         )
         if rr.status_code != 200 or "Registro digital:" not in rr.text:
             return ius, None
@@ -186,7 +186,7 @@ def discover_weekly_issues(target: date):
 
     max_scan = int(CFG.get("ius_scan_window", 120))
     end_ius = start_ius + max_scan
-    workers = int(CFG.get("ius_workers", 12))
+    workers = int(CFG.get("ius_workers", 24))
     print(
         f"[SJF] Descubriendo IUS {start_ius}-{end_ius} para {target.isoformat()} "
         f"({workers} conexiones concurrentes)...",
@@ -204,7 +204,7 @@ def discover_weekly_issues(target: date):
             done_count += 1
             if html:
                 results[ius] = html
-            if done_count % 20 == 0 or done_count == (end_ius - start_ius + 1):
+            if done_count % 10 == 0 or done_count == (end_ius - start_ius + 1):
                 print(f"[SJF] sondeados {done_count}/{end_ius-start_ius+1}", flush=True)
 
     for ius in sorted(results):
@@ -247,7 +247,7 @@ def parse_detail(page, item, target):
         rr = requests.get(
             item["url"],
             headers={"User-Agent": "RadarJurisprudencial/1.0 (consulta publica)"},
-            timeout=(4, 10),
+            timeout=(2.5, 5),
         )
         rr.raise_for_status()
         html = rr.text
@@ -284,31 +284,6 @@ def parse_detail(page, item, target):
         epoch=body.get("Época", ""),
         text=text[:30000],
         source_page=item["source_page"],
-    )
-
-def parse_detail(page, item, target):
-    page.goto(item["url"], wait_until="domcontentloaded", timeout=CFG["request_timeout_seconds"]*1000)
-    page.wait_for_timeout(300)
-    soup = BeautifulSoup(page.content(), "lxml")
-    text = clean(soup.get_text(" ", strip=True))
-    title = clean(soup.find("h1").get_text(" ", strip=True)) if soup.find("h1") else item["title"]
-    body = {}
-    labels = ["Registro digital", "Órgano", "Materia", "Época", "Fecha", "Tipo de criterio"]
-    for label in labels:
-        node = soup.find(string=re.compile(re.escape(label), re.I))
-        if node:
-            parent = node.parent
-            body[label] = clean(parent.parent.get_text(" ", strip=True) if parent and parent.parent else str(node))
-    register = ""
-    m = re.search(r"Registro digital\s*[:#]?\s*(\d{5,})", text, re.I)
-    if m: register = m.group(1)
-    kind = "Precedente" if "ejecutoria" in item["url"] or "precedente" in title.lower() else ("Acuerdo" if "acuerdo" in item["url"] else "Tesis")
-    return Record(
-        record_id=register or item["url"],
-        kind=kind, title=title, url=item["url"], official_source=item["url"],
-        publication_date=target.isoformat(), register=register,
-        court=body.get("Órgano",""), matter=body.get("Materia",""),
-        epoch=body.get("Época",""), text=text[:30000], source_page=item["source_page"]
     )
 
 def score_record(r: Record):
