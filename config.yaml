@@ -1,8 +1,8 @@
-official_base: "https://sjfsemanal.scjn.gob.mx"
+official_base: "https://sjf2.scjn.gob.mx"
 official_sjf2: "https://sjf2.scjn.gob.mx"
 official_scjn: "https://www.scjn.gob.mx"
-weekly_page: "https://sjfsemanal.scjn.gob.mx/listado-resultado-tesis"
-agreements_page: "https://sjfsemanal.scjn.gob.mx/busqueda-principal-acuerdos"
+weekly_page: "https://sjf2.scjn.gob.mx/listado-resultado-tesis"
+agreements_page: "https://sjf2.scjn.gob.mx/busqueda-principal-acuerdos"
 gaceta_page: "https://www.scjn.gob.mx/coordinacion/gaceta"
 timezone: "America/Mexico_City"
 lookback_fridays: 8
